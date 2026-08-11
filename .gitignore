@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# PyInstaller output
+build/
+dist/
+*.spec~
+RELEASE_TO_TESTERS/
+*_TESTER_RELEASE.zip
+
+# Runtime/user data
+profile.json
+dex_cache.json
+dex_meta.json
+spawn_cache.json
+item_index.json
+move_cache.json
+crash.log
+
+# IDE/editor
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Temporary
+*.tmp
+*.bak

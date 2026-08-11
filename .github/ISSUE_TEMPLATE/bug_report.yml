@@ -1,0 +1,51 @@
+name: Bug report
+description: Report something that is not working correctly
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: input
+    id: companion
+    attributes:
+      label: Cobblemon Companion version
+      placeholder: v1.7.1
+    validations:
+      required: true
+
+  - type: input
+    id: minecraft
+    attributes:
+      label: Minecraft / Cobblemon version
+      placeholder: Minecraft 1.21.1 / Cobblemon 1.7.3
+    validations:
+      required: true
+
+  - type: input
+    id: modpack
+    attributes:
+      label: Modpack
+      placeholder: Modpack name, if applicable
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Tell us what you expected and what actually happened.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open...
+        2. Click...
+        3. See...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Crash log / screenshots
+      description: Paste relevant crash text or drag files/screenshots here.
