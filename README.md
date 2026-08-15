@@ -87,7 +87,7 @@ Current Hunt and Weekly Bingo overlays support:
 - opacity
 - remembered placement
 
-<<<<<<< HEAD
+
 For best results, use Minecraft in **windowed or borderless fullscreen**.
 =======
 Overlays can be moved, resized, locked, and given adjustable opacity.
