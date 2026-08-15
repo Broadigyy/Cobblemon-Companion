@@ -77,7 +77,8 @@ to jump directly to Overlay controls.
 
 ## Screenshots
 
-Screenshots and short demos will be added as public testing continues.
+<img width="2532" height="1217" alt="image" src="https://github.com/user-attachments/assets/2cc1568a-2c52-429d-9a89-633ed8519158" />
+
 
 ## Support development
 
