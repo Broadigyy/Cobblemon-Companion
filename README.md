@@ -1,136 +1,133 @@
 # Cobblemon Companion
 
-**Cobblemon Companion** is a free Windows desktop companion for **Cobblemon** that brings common gameplay tools into one polished application.
+**Cobblemon Companion** is a free Windows desktop companion for Cobblemon, bringing collection tracking, spawning, competitive tools, overlays, and reference data into one polished application.
 
-> Current public testing version: **v1.7.1**
+> Current public testing version: **v1.8.2**
 
-## What it does
+## Major features
 
-Cobblemon Companion includes:
-
-- **Pokédex 2.0** with forms, stats, abilities, learnsets, evolution information, breeding information, and cross-navigation
-- **Spawn Finder** using imported Cobblemon/modpack spawn data
-- **Poké Snack recommendations** for lure combinations
-- **Weekly Bingo tracking**
-- **Hunt Planner 2.0** with Bingo / Collection overlap and shared hunting areas
-- **Collection 2.0** Living Dex tracking with generation completion
-- **Competitive Team Builder**
-- **Competitive Analysis**
-- **Threat Analyzer**
-- **Team Advisor**
-- **Breeding Planner**
-- **Move / Ability / Item database**
-- **Crafting and cooking recipe presentation**
-- **Current Hunt overlay**
-- **Weekly Bingo overlay**
-- Resizable, draggable, lockable, always-on-top overlays
-- Saved overlay position, size, and opacity
-- Integrated desktop navigation with Back history
+- Pokédex with forms, stats, abilities, learnsets, evolutions, breeding and cross-navigation
+- Spawn Finder with Pokémon search and reverse area browsing
+- Poké Snack recommendations
+- Living Dex, Shiny Dex and Form Dex tracking
+- Weekly Bingo
+- Hunt Planner
+- Competitive Team Builder
+- Saved individual Pokémon builds
+- Team import/export codes
+- Competitive Analysis
+- Threat Analyzer
+- Team Advisor
+- Breeding Planner
+- Move / Ability / Item database
+- Crafting and cooking recipe views
+- Current Hunt overlay
+- Weekly Bingo overlay
+- Customizable Dashboard
+- First-launch onboarding
+- Backup & Restore
+- Local data completeness audit
 
 ## Download
 
-Compiled Windows builds are distributed through the **Releases** section of this repository.
+Compiled Windows builds are available from the **Releases** section.
 
-When a release is available:
+1. Download the latest `Cobblemon_Companion_..._TESTER_RELEASE.zip`.
+2. Extract it.
+3. Run `Cobblemon Companion.exe`.
 
-1. Open the repository's **Releases** page.
-2. Download the latest `Cobblemon_Companion_..._TESTER_RELEASE.zip`.
-3. Extract the ZIP.
-4. Run `Cobblemon Companion.exe`.
+Python is not required for the compiled Windows release.
 
-Python is **not required** to run the compiled Windows build.
+## What's new in v1.8.2
 
-## First launch
+- **Home is now Dashboard**
+- Removed visible `2.0` branding from page names
+- Added **Damp Rock** and audited additional weather/terrain held-item fallbacks
+- Added **Backup & Restore** in Settings
+- Added **Run Data Audit** in Settings
+- Preserved complete Mega Stone fallback coverage
+- The experimental Pokédex screen-scanning branch was intentionally removed
 
-Companion can auto-detect many Cobblemon installations. If needed:
+The broader v1.8 feature set also includes Shiny/Form Dex tracking, Saved Builds, Team Import/Export, Spawn Finder reverse browsing, Dashboard customization and onboarding.
 
-1. Open **Settings**.
-2. Select your installed Cobblemon `.jar`.
-3. Companion will import the species, forms, spawn data, items, moves, and other supported information it can read from the selected modpack.
+## Data storage
 
-Companion keeps its own profile/cache data separately under:
+Companion stores user profile/cache data separately under:
 
 ```text
 %APPDATA%\Cobblemon Companion
 ```
 
-It does **not** modify your Cobblemon JAR or Minecraft modpack.
+Normal application replacement/updates should not erase Collection, teams, Bingo, hunts, or other profile progress.
+
+## Backup & Restore
+
+Open **Settings → Backup & Restore** to export a `.ccbackup`.
+
+A backup includes profile data such as:
+
+- Living / Shiny / Form Dex
+- teams
+- saved builds
+- hunts
+- Bingo
+- Dashboard preferences
+- profile settings
+
+Restore validates the backup before replacing current profile data and keeps a safety copy of the previous profile.
 
 ## Overlays
 
-The overlay system currently includes:
+Current Hunt and Weekly Bingo overlays support:
 
-- **Current Hunt**
-- **Weekly Bingo**
+- always-on-top presentation
+- dragging
+- resizing
+- lock/edit mode
+- opacity
+- remembered placement
 
-Overlays can be moved, resized, locked, and given adjustable opacity.
-
-For the most reliable behavior, Minecraft should be played in **windowed or borderless fullscreen** mode. True exclusive fullscreen may cover normal Windows top-level overlays.
-
-Use:
-
-```text
-Ctrl + Shift + O
-```
-
-to jump directly to Overlay controls.
-
-## Screenshots
-
-Screenshots and short demos will be added as public testing continues.
+For best results, use Minecraft in **windowed or borderless fullscreen**.
 
 ## Support development
 
-Cobblemon Companion is free.
+Cobblemon Companion is completely free.
 
-If you enjoy using it and want to support continued development:
+☕ **Ko-fi:** https://ko-fi.com/broadigy
 
-**☕ Ko-fi: https://ko-fi.com/broadigy**
-
-There are no paid features, donation nags, or locked functionality.
+No paid features, donation nags, or locked functionality.
 
 ## Reporting bugs
 
-Please use the **Issues** tab on GitHub.
-
-When reporting a bug, include:
+Please use GitHub Issues and include:
 
 - Companion version
-- Cobblemon version
 - Minecraft version
-- What you were doing when it happened
-- Screenshot if applicable
-- `crash.log` if one was created
+- Cobblemon version
+- modpack name if applicable
+- what you were doing
+- screenshots where useful
+- crash log if one exists
 
-Crash logs are normally stored in:
+Crash logs are normally stored at:
 
 ```text
 %APPDATA%\Cobblemon Companion\crash.log
 ```
 
-## Source code and usage rights
+## Source visibility and usage rights
 
-The source is publicly visible so users can inspect what the application does and so development can be transparent.
+The source is publicly visible for transparency and auditing.
 
-**Public visibility does not grant permission to copy, redistribute, rebrand, sell, or publish modified versions of Cobblemon Companion.**
+Public visibility does **not** grant permission to copy, redistribute, rebrand, sell, or publish modified versions of Cobblemon Companion.
 
-See [COPYRIGHT.md](COPYRIGHT.md) for details.
-
-## Privacy
-
-Cobblemon Companion is a local desktop application. It does not require an account and does not operate its own analytics or tracking service.
-
-Some features may contact third-party public data services when obtaining missing reference data or sprites. See [docs/PRIVACY.md](docs/PRIVACY.md).
+See `COPYRIGHT.md`.
 
 ## Disclaimer
 
-Cobblemon Companion is an independent community project.
+Cobblemon Companion is an independent community project and is not affiliated with, endorsed by, sponsored by, or officially connected to Cobblemon, Mojang Studios, Microsoft, Nintendo, Game Freak, or The Pokémon Company.
 
-It is **not affiliated with, endorsed by, sponsored by, or officially connected to Cobblemon, Mojang Studios, Microsoft, Nintendo, Game Freak, or The Pokémon Company**.
-
-Pokémon names, characters, images, and related trademarks belong to their respective owners.
-
-Cobblemon belongs to its respective developers and contributors.
+Pokémon and related trademarks belong to their respective owners.
 
 ---
 

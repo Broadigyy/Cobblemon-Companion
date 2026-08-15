@@ -1,6 +1,9 @@
 import webbrowser
 
 import json
+import time
+import copy
+import shutil
 import os
 import re
 import threading
@@ -17,7 +20,7 @@ from PIL import Image, ImageDraw, ImageTk
 from datetime import date
 
 APP_NAME = "Cobblemon Companion"
-APP_VERSION = "1.7.1"
+APP_VERSION = "1.8.2"
 SPECIES_PARSER_VERSION = 5
 
 def user_data_dir() -> Path:
@@ -1586,6 +1589,11 @@ HELD_ITEM_EFFECTS = {
     "Covert Cloak": {"note": "Blocks many secondary effects from damaging moves."},
     "Clear Amulet": {"note": "Prevents the holder's stats from being lowered by opponents."},
     "Booster Energy": {"note": "Activates certain Paradox Pokémon abilities without terrain/weather support."},
+    "Damp Rock": {"note": "Extends rain created by the holder from 5 turns to 8 turns."},
+    "Heat Rock": {"note": "Extends harsh sunlight created by the holder from 5 turns to 8 turns."},
+    "Icy Rock": {"note": "Extends snow/hail weather created by the holder from 5 turns to 8 turns where supported."},
+    "Smooth Rock": {"note": "Extends sandstorm created by the holder from 5 turns to 8 turns."},
+    "Terrain Extender": {"note": "Extends terrain created by the holder from 5 turns to 8 turns."},
 }
 
 def held_item_options(app):
@@ -3447,7 +3455,12 @@ def default_profile():
         "bingo": [{"pokemon": p, "caught": False} for p in DEFAULT_BINGO],
         "hunts": [],
         "living_dex": [],
+        "shiny_dex": [],
+        "form_dex": [],
         "teams": [],
+        "saved_builds": [],
+        "dashboard_cards": ["Hunts", "Bingo", "Team", "Breeding", "PokemonOfDay", "QuickActions"],
+        "onboarding_complete": False,
         "last_breeding_target": "",
     }
 
@@ -3468,6 +3481,52 @@ def load_profile():
 def save_profile(profile):
     with open(SAVE_FILE, "w", encoding="utf-8") as f:
         json.dump(profile, f, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# V1.8.0 shared helpers
+# ---------------------------------------------------------------------------
+
+TEAM_SHARE_PREFIX = "COBBLEMON_COMPANION_TEAM_V1"
+
+def export_team_code(team):
+    payload={
+        "format":"Cobblemon Companion Team",
+        "version":1,
+        "team":{
+            "name":str((team or {}).get("name","Shared Team")),
+            "members":[normalize_team_member(x) for x in (team or {}).get("members",[])[:6]]
+        }
+    }
+    while len(payload["team"]["members"])<6:
+        payload["team"]["members"].append(blank_team_member())
+    return TEAM_SHARE_PREFIX+"\n"+json.dumps(payload,ensure_ascii=False,indent=2)
+
+def import_team_code(value):
+    raw=str(value or "").strip()
+    if raw.startswith(TEAM_SHARE_PREFIX):
+        raw=raw[len(TEAM_SHARE_PREFIX):].strip()
+    data=json.loads(raw)
+    if isinstance(data,dict) and "team" in data:
+        data=data["team"]
+    if not isinstance(data,dict):
+        raise ValueError("Team data is not a valid object.")
+    members=data.get("members",[])
+    if not isinstance(members,list):
+        raise ValueError("Team members are missing.")
+    team={"name":str(data.get("name","Imported Team") or "Imported Team"),"members":[]}
+    for member in members[:6]:
+        team["members"].append(normalize_team_member(member))
+    while len(team["members"])<6:
+        team["members"].append(blank_team_member())
+    return team
+
+def base_collection_species(pokedex):
+    """Base species only; forms are tracked separately in Form Dex."""
+    return [p for p in (pokedex or []) if not p.get("is_form")]
+
+def form_collection_species(pokedex):
+    return [p for p in (pokedex or []) if p.get("is_form")]
 
 class NavButton(tk.Button):
     def __init__(self, master, text, command):
@@ -3530,7 +3589,7 @@ class HomePage(Page):
         left = tk.Frame(header, bg=BG)
         left.pack(side="left", fill="x", expand=True)
         tk.Label(
-            left, text="Home Dashboard",
+            left, text="Dashboard",
             bg=BG, fg=TEXT,
             font=("Segoe UI Semibold", 24)
         ).pack(anchor="w")
@@ -3540,6 +3599,12 @@ class HomePage(Page):
             font=("Segoe UI", 9)
         )
         self.profile_label.pack(anchor="w", pady=(2,0))
+
+        tk.Button(
+            header,text="Edit Dashboard",
+            command=lambda:DashboardEditor(self.app,self),
+            bg=PANEL_2,fg=TEXT,relief="flat",padx=11,pady=7
+        ).pack(side="right",padx=(8,0))
 
         # Quick global search directly on Home.
         search = tk.Frame(header, bg=BG)
@@ -3601,6 +3666,7 @@ class HomePage(Page):
         self.quick_card = self.make_card(self.inner, "Quick Actions", None, None)
         self.quick_card.pack(fill="x", padx=28, pady=(0, 28))
 
+        self.apply_dashboard_layout()
         self.refresh()
 
     def make_card(self, parent, title, row, col):
@@ -3628,6 +3694,22 @@ class HomePage(Page):
         win = GlobalSearchWindow(self.app, q)
         self.search_query.set("")
 
+    def apply_dashboard_layout(self):
+        visible=set(self.app.profile.get("dashboard_cards",["Hunts","Bingo","Team","Breeding","PokemonOfDay","QuickActions"]))
+        cards=[("Hunts",self.hunts_card),("Bingo",self.bingo_card),("Team",self.team_card),("Breeding",self.breeding_card)]
+        # Reflow the four grid cards without holes.
+        for _,card in cards:card.grid_forget()
+        shown=[(k,c) for k,c in cards if k in visible]
+        for idx,(k,card) in enumerate(shown):
+            row,col=divmod(idx,2)
+            card.grid(row=row,column=col,sticky="nsew",padx=(0 if col==0 else 5,5 if col==0 else 0),pady=5)
+        if "PokemonOfDay" in visible:
+            self.potd_card.pack(fill="x",padx=28,pady=(0,12))
+        else:self.potd_card.pack_forget()
+        if "QuickActions" in visible:
+            self.quick_card.pack(fill="x",padx=28,pady=(0,28))
+        else:self.quick_card.pack_forget()
+
     def refresh(self):
         p = self.app.profile
         self.profile_label.config(
@@ -3653,6 +3735,7 @@ class HomePage(Page):
             val.config(text=value)
             btn.config(command=lambda p=page:self.app.show_page(p))
 
+        self.apply_dashboard_layout()
         self.render_hunts()
         self.render_bingo()
         self.render_team()
@@ -4701,7 +4784,7 @@ class GlobalSearchWindow(tk.Toplevel):
             self.app.open_reference_detail(kind,name)
 
 class PokemonDetailWindow(tk.Toplevel):
-    """Pokédex 2.0 — central Pokémon hub with tabbed, cross-linked data."""
+    """Central Pokémon hub with tabbed, cross-linked data."""
     TABS = ("Overview", "Spawns", "Moves", "Evolution", "Breeding", "Competitive")
 
     def __init__(self, app, pokemon_name):
@@ -4712,7 +4795,7 @@ class PokemonDetailWindow(tk.Toplevel):
         self.active_tab = "Overview"
         self.sprite_ref = None
 
-        self.title(f"{pokemon_name} — Pokédex 2.0")
+        self.title(f"{pokemon_name} — Pokédex")
         self.configure(bg=BG)
         self.geometry("1080x800")
         self.minsize(920, 680)
@@ -5098,7 +5181,7 @@ class PokemonDetailWindow(tk.Toplevel):
 
 
 # ---------------------------------------------------------------------------
-# V1.4.1 — Embedded Pokédex 2.0 page
+# Embedded Pokédex page
 # ---------------------------------------------------------------------------
 
 class EmbeddedPokemonDetailPage(tk.Frame):
@@ -5258,7 +5341,7 @@ class EmbeddedPokemonDetailPage(tk.Frame):
 
 class PokedexPage(Page):
     title = "Pokédex"
-    subtitle = "Pokédex 2.0 — a connected hub for every implemented Pokémon in your installed Cobblemon build."
+    subtitle = "A connected hub for every implemented Pokémon in your installed Cobblemon build."
 
     def __init__(self, master, app):
         super().__init__(master, app)
@@ -5397,7 +5480,7 @@ class PokedexPage(Page):
                  font=("Segoe UI Semibold", 11)).pack(anchor="w", padx=24, pady=(18, 0))
 
         tk.Button(
-            self.detail, text="Open Pokédex 2.0 Hub",
+            self.detail, text="Open Pokédex Hub",
             command=lambda name=p["name"]: self.app.open_pokemon_detail(name),
             bg=ACCENT_2, fg="white", relief="flat", padx=14, pady=8
         ).pack(anchor="w", padx=24, pady=(14, 0))
@@ -5682,6 +5765,18 @@ class SpawnFinderPage(Page):
     def __init__(self, master, app):
         super().__init__(master, app)
         self.header()
+        browse_row=tk.Frame(self,bg=BG)
+        browse_row.pack(fill="x",padx=28,pady=(0,8))
+        tk.Button(
+            browse_row,text="Browse by Biome / Dimension / Time",
+            command=self.app.open_spawn_browser,
+            bg=ACCENT_2,fg="white",relief="flat",padx=14,pady=8
+        ).pack(side="left")
+        tk.Label(
+            browse_row,text="Spawn Finder can work backwards: tell Companion where you are and see what can spawn.",
+            bg=BG,fg=MUTED,font=("Segoe UI",8)
+        ).pack(side="left",padx=12)
+
 
         controls = tk.Frame(self, bg=BG)
         controls.pack(fill="x", padx=28, pady=(0, 10))
@@ -7094,7 +7189,7 @@ class ThreatAnalyzerWindow(tk.Toplevel):
 
 
 # ---------------------------------------------------------------------------
-# V1.4.0 — Navigation 2.0 embedded analysis pages
+# V1.4.0 — Embedded analysis pages
 # ---------------------------------------------------------------------------
 
 class EmbeddedAnalysisBase(tk.Frame):
@@ -8140,6 +8235,12 @@ class TeamBuilderPage(Page):
         tk.Button(top,text="Delete",command=self.delete_team,bg=PANEL_2,fg=TEXT,relief="flat",padx=12,pady=8).pack(side="left",padx=3)
         tk.Button(top,text="Full Analysis",command=self.open_analysis,bg=GOOD,fg="white",relief="flat",padx=12,pady=8).pack(side="left",padx=(10,3))
         self.status=tk.Label(top,text="",bg=BG,fg=MUTED); self.status.pack(side="right")
+        share=tk.Frame(self,bg=BG)
+        share.pack(fill="x",padx=28,pady=(0,8))
+        tk.Button(share,text="Copy Team Code",command=self.copy_team_code,bg=PANEL_2,fg=TEXT,relief="flat",padx=11,pady=6).pack(side="left")
+        tk.Button(share,text="Import Team Code",command=self.import_team_code_ui,bg=PANEL_2,fg=TEXT,relief="flat",padx=11,pady=6).pack(side="left",padx=6)
+        tk.Button(share,text="Saved Builds",command=lambda:self.app.show_page("Saved Builds"),bg=ACCENT_2,fg="white",relief="flat",padx=11,pady=6).pack(side="left")
+        tk.Label(share,text="Share teams through Discord/text without rebuilding all six slots.",bg=BG,fg=MUTED,font=("Segoe UI",8)).pack(side="right")
         mf=tk.Frame(self,bg=BG); mf.pack(fill="x",padx=28,pady=(0,8)); self.cards=[]
         for c in range(3):mf.grid_columnconfigure(c,weight=1,uniform="team")
         for i in range(6):
@@ -8188,6 +8289,33 @@ class TeamBuilderPage(Page):
     def spawn(self,i):
         p=self.current_team()["members"][i].get("pokemon","")
         if p:self.app.show_page("Spawn Finder"); self.app.pages["Spawn Finder"].focus_pokemon(p)
+    def copy_team_code(self):
+        value=export_team_code(self.current_team())
+        try:
+            self.clipboard_clear(); self.clipboard_append(value); self.update()
+            messagebox.showinfo(APP_NAME,"Team code copied to clipboard.")
+        except Exception as exc:
+            messagebox.showerror(APP_NAME,f"Could not copy team code.\n\n{exc}")
+
+    def import_team_code_ui(self):
+        win=tk.Toplevel(self.app); win.title("Import Team Code"); win.configure(bg=BG); win.geometry("650x540")
+        tk.Label(win,text="Import Team",bg=BG,fg=TEXT,font=("Segoe UI Semibold",18)).pack(anchor="w",padx=18,pady=(18,4))
+        tk.Label(win,text="Paste a Cobblemon Companion team code below.",bg=BG,fg=MUTED,font=("Segoe UI",9)).pack(anchor="w",padx=18,pady=(0,8))
+        box=tk.Text(win,bg=PANEL,fg=TEXT,insertbackground=TEXT,relief="flat",wrap="word",font=("Consolas",8)); box.pack(fill="both",expand=True,padx=18,pady=(0,10))
+        try:
+            clip=self.clipboard_get()
+            if str(clip).startswith(TEAM_SHARE_PREFIX):box.insert("1.0",clip)
+        except Exception:pass
+        def do_import():
+            try:
+                team=import_team_code(box.get("1.0","end"))
+            except Exception as exc:
+                messagebox.showerror(APP_NAME,f"That team code could not be read.\n\n{exc}",parent=win); return
+            self.app.profile.setdefault("teams",[]).append(team)
+            self.team_index=len(self.app.profile["teams"])-1
+            self.app.save(); self.refresh_menu(); self.refresh(); win.destroy()
+        tk.Button(win,text="Import Team",command=do_import,bg=ACCENT_2,fg="white",relief="flat",padx=14,pady=8).pack(anchor="e",padx=18,pady=(0,18))
+
     def refresh(self):
         self.ensure_team(); t=self.current_team(); self.sprite_refs={}; dexes=[]; count=0
         for i,m in enumerate(t["members"]):
@@ -8228,7 +8356,7 @@ class TeamBuilderPage(Page):
             tk.Label(b,text=f"Weak {d['weak']} • Resist {d['resist']} • Immune {d['immune']}",bg=PANEL_2,fg=MUTED,font=("Segoe UI",7)).pack(pady=(0,5))
 
 class CollectionPage(Page):
-    title = "Collection 2.0"
+    title = "Collection"
     subtitle = "A visual Living Dex and completion center for every Pokémon implemented in your Cobblemon version."
 
     PAGE_SIZE = 24
@@ -8252,11 +8380,16 @@ class CollectionPage(Page):
 
         controls=tk.Frame(self,bg=BG); controls.pack(fill="x",padx=28,pady=(0,8))
         self.query=tk.StringVar()
+        self.mode_var=tk.StringVar(value="Living Dex")
         self.status_var=tk.StringVar(value="All")
         self.type_var=tk.StringVar(value="All types")
         self.gen_var=tk.StringVar(value="All generations")
+        mode=tk.OptionMenu(controls,self.mode_var,"Living Dex","Shiny Dex","Form Dex")
+        mode.config(bg=ACCENT_2,fg="white",activebackground=ACCENT_2,activeforeground="white",relief="flat",highlightthickness=0,font=("Segoe UI Semibold",9))
+        mode["menu"].config(bg=PANEL_2,fg=TEXT)
+        mode.grid(row=0,column=0,sticky="ew",padx=(0,8))
         search=tk.Entry(controls,textvariable=self.query,bg=PANEL,fg=TEXT,insertbackground=TEXT,relief="flat",font=("Segoe UI",11))
-        search.grid(row=0,column=0,sticky="ew",ipady=9)
+        search.grid(row=0,column=1,sticky="ew",ipady=9)
         for col,(var,values) in enumerate([
             (self.status_var,["All","Owned","Missing"]),
             (self.type_var,["All types"]+list(TYPE_COLORS.keys())),
@@ -8265,9 +8398,10 @@ class CollectionPage(Page):
             menu=tk.OptionMenu(controls,var,*values)
             menu.config(bg=PANEL_2,fg=TEXT,activebackground=PANEL_2,activeforeground=TEXT,relief="flat",highlightthickness=0,font=("Segoe UI",9))
             menu["menu"].config(bg=PANEL_2,fg=TEXT)
-            menu.grid(row=0,column=col,sticky="ew",padx=(8 if col==1 else 0,8 if col<3 else 0))
-        controls.grid_columnconfigure(0,weight=4)
-        for c in range(1,4):controls.grid_columnconfigure(c,weight=1)
+            menu.grid(row=0,column=col+1,sticky="ew",padx=(0,8 if col<3 else 0))
+        controls.grid_columnconfigure(0,weight=1)
+        controls.grid_columnconfigure(1,weight=4)
+        for c in range(2,5):controls.grid_columnconfigure(c,weight=1)
 
         # Regional / generation completion strip.
         self.gen_strip=tk.Frame(self,bg=BG)
@@ -8369,18 +8503,22 @@ class CollectionPage(Page):
                 "spawn":spawn
             })
 
-        for var in (self.query,self.status_var,self.type_var,self.gen_var):
+        for var in (self.mode_var,self.query,self.status_var,self.type_var,self.gen_var):
             var.trace_add("write",lambda *_:self.filters_changed())
         self.rebuild_filter(); self.render_page(prefetch=False)
 
     def owned_set(self):
-        return {str(x).strip().casefold() for x in self.app.profile.get("living_dex",[]) if str(x).strip()}
+        mode=self.mode_var.get()
+        key="living_dex" if mode=="Living Dex" else ("shiny_dex" if mode=="Shiny Dex" else "form_dex")
+        return {str(x).strip().casefold() for x in self.app.profile.get(key,[]) if str(x).strip()}
+
+    def mode_species(self):
+        return form_collection_species(self.app.pokedex) if self.mode_var.get()=="Form Dex" else base_collection_species(self.app.pokedex)
 
     def generation_stats(self):
-        owned=self.owned_set()
-        result={}
+        owned=self.owned_set(); result={}
         for gen in range(1,10):
-            mons=[p for p in self.app.pokedex if generation_for_dex(p.get("dex",0))==gen]
+            mons=[p for p in self.mode_species() if generation_for_dex(p.get("dex",0))==gen]
             have=sum(1 for p in mons if p.get("name","").strip().casefold() in owned)
             result[gen]=(have,len(mons))
         return result
@@ -8401,7 +8539,7 @@ class CollectionPage(Page):
             try:wanted=int(gf.split()[-1])
             except Exception:pass
         out=[]
-        for p in self.app.pokedex:
+        for p in self.mode_species():
             name=p.get("name",""); dex=p.get("dex",0); types=p.get("types",[])
             is_owned=name.strip().casefold() in owned
             if q and not(q in name.casefold() or q==str(dex) or any(q in str(t).casefold() for t in types)):continue
@@ -8414,9 +8552,13 @@ class CollectionPage(Page):
 
     def render_progress(self,owned_total,total):
         pct=(owned_total/total*100) if total else 0
-        self.progress_title.config(text=f"National Living Dex   {owned_total} / {total}   •   {pct:.1f}%")
+        title=self.mode_var.get()
+        self.progress_title.config(text=f"{title}   {owned_total} / {total}   •   {pct:.1f}%")
         missing=max(0,total-owned_total)
-        self.progress_detail.config(text=f"{missing} remaining  •  Click a Pokémon sprite to toggle ownership  •  Missing Pokémon can be sent directly to Hunt Planner.")
+        detail=("Click a form to toggle that form's ownership." if title=="Form Dex" else
+                "Click a Pokémon to toggle shiny ownership." if title=="Shiny Dex" else
+                "Click a Pokémon to toggle normal ownership.")
+        self.progress_detail.config(text=f"{missing} remaining  •  {detail}")
         self.progress.delete("all")
         self.progress.update_idletasks()
         w=max(1,self.progress.winfo_width()); h=max(1,self.progress.winfo_height())
@@ -8431,8 +8573,8 @@ class CollectionPage(Page):
             b.pack(side="left",fill="x",expand=True,padx=(0,4 if gen<9 else 0))
 
     def render_page(self,prefetch=True):
-        owned=self.owned_set(); total=len(self.app.pokedex)
-        owned_total=sum(1 for p in self.app.pokedex if p.get("name","").strip().casefold() in owned)
+        owned=self.owned_set(); mode_species=self.mode_species(); total=len(mode_species)
+        owned_total=sum(1 for p in mode_species if p.get("name","").strip().casefold() in owned)
         self.render_progress(owned_total,total)
         start=self.page_index*self.PAGE_SIZE; visible=self.filtered[start:start+self.PAGE_SIZE]
         self.sprite_refs={}; visible_dex=[]
@@ -8452,7 +8594,7 @@ class CollectionPage(Page):
                     if img.width()>=96 or img.height()>=96:img=img.subsample(2,2)
                     sprite=img; self.sprite_refs[i]=img
                 except Exception:pass
-            mark="✓ " if is_owned else ""
+            mark=("★ " if is_owned and self.mode_var.get()=="Shiny Dex" else "✓ " if is_owned else "")
             card["main"].config(bg=bg)
             card["sprite"].config(
                 image=sprite if sprite else "",
@@ -8511,11 +8653,13 @@ class CollectionPage(Page):
     def toggle_owned(self,pokemon):
         name=str(pokemon or "").strip()
         if not name:return
-        current=list(self.app.profile.get("living_dex",[]))
-        keys=[str(x).strip().casefold() for x in current]; key=name.casefold()
-        if key in keys:current.pop(keys.index(key))
+        mode=self.mode_var.get()
+        key="living_dex" if mode=="Living Dex" else ("shiny_dex" if mode=="Shiny Dex" else "form_dex")
+        current=list(self.app.profile.get(key,[]))
+        keys=[str(x).strip().casefold() for x in current]; target=name.casefold()
+        if target in keys:current.pop(keys.index(target))
         else:current.append(name)
-        self.app.profile["living_dex"]=current; self.app.save()
+        self.app.profile[key]=current; self.app.save()
         self.rebuild_filter()
         self.page_index=min(self.page_index,max(0,(len(self.filtered)-1)//self.PAGE_SIZE))
         self.render_page(prefetch=False)
@@ -8526,7 +8670,7 @@ class CollectionPage(Page):
         hunts=self.app.profile.setdefault("hunts",[])
         keys={str(h.get("pokemon","")).strip().casefold() for h in hunts}
         if name.casefold() not in keys:
-            hunts.append({"pokemon":name,"note":"Added from Collection 2.0"})
+            hunts.append({"pokemon":name,"note":"Added from Collection"})
             self.app.save()
         self.render_page(prefetch=False)
 
@@ -8575,6 +8719,15 @@ class SettingsPage(Page):
         tk.Button(card, text="Save Profile", command=self.save_settings,
                   bg=ACCENT_2, fg="white", relief="flat", padx=14, pady=9).pack(anchor="w", padx=18, pady=18)
 
+        backup = tk.Frame(self, bg=PANEL)
+        backup.pack(fill="x", padx=28, pady=(0, 14))
+        tk.Label(backup, text="Backup & Restore", bg=PANEL, fg=TEXT, font=("Segoe UI Semibold", 14)).pack(anchor="w", padx=18, pady=(18,5))
+        tk.Label(backup, text="Protect your Collection, Shiny/Form Dex, teams, builds, hunts, Bingo and Dashboard preferences.",
+                 bg=PANEL, fg=MUTED, font=("Segoe UI", 9), justify="left", wraplength=780).pack(anchor="w", padx=18, pady=(0,10))
+        backup_buttons=tk.Frame(backup,bg=PANEL); backup_buttons.pack(anchor="w",padx=14,pady=(0,18))
+        tk.Button(backup_buttons,text="Export Companion Backup",command=self.export_backup,bg=ACCENT_2,fg="white",relief="flat",padx=14,pady=9).pack(side="left",padx=4)
+        tk.Button(backup_buttons,text="Restore Companion Backup",command=self.restore_backup,bg=PANEL_2,fg=TEXT,relief="flat",padx=14,pady=9).pack(side="left",padx=4)
+
         data = tk.Frame(self, bg=PANEL)
         data.pack(fill="x", padx=28, pady=(0, 28))
         tk.Label(data, text="Cobblemon Pokédex Source", bg=PANEL, fg=TEXT,
@@ -8597,7 +8750,69 @@ class SettingsPage(Page):
                   bg=PANEL_2, fg=TEXT, relief="flat", padx=14, pady=9).pack(side="left", padx=4)
         tk.Button(buttons, text="Refresh Spawns Only", command=self.refresh_spawns_only,
                   bg=PANEL_2, fg=TEXT, relief="flat", padx=14, pady=9).pack(side="left", padx=4)
+        tk.Button(buttons,text="Run Data Audit",command=self.audit_data,bg=PANEL_2,fg=TEXT,relief="flat",padx=14,pady=9).pack(side="left",padx=4)
         self.refresh()
+
+    def export_backup(self):
+        path=filedialog.asksaveasfilename(title="Export Cobblemon Companion Backup",defaultextension=".ccbackup",
+            initialfile=f"Cobblemon_Companion_Backup_{time.strftime('%Y-%m-%d')}.ccbackup",
+            filetypes=[("Cobblemon Companion Backup","*.ccbackup"),("JSON","*.json"),("All files","*.*")])
+        if not path:return
+        payload={"format":"Cobblemon Companion Backup","backup_version":1,"app_version":APP_VERSION,
+                 "created":time.strftime("%Y-%m-%d %H:%M:%S"),"profile":copy.deepcopy(self.app.profile)}
+        try:
+            Path(path).write_text(json.dumps(payload,indent=2,ensure_ascii=False),encoding="utf-8")
+            messagebox.showinfo(APP_NAME,"Backup exported successfully.")
+        except Exception as exc:messagebox.showerror(APP_NAME,f"Could not export backup:\n\n{exc}")
+
+    def restore_backup(self):
+        path=filedialog.askopenfilename(title="Restore Cobblemon Companion Backup",
+            filetypes=[("Cobblemon Companion Backup","*.ccbackup"),("JSON","*.json"),("All files","*.*")])
+        if not path:return
+        try:
+            raw=json.loads(Path(path).read_text(encoding="utf-8"))
+            if not isinstance(raw,dict) or raw.get("format")!="Cobblemon Companion Backup":raise ValueError("Unrecognized backup format.")
+            incoming=raw.get("profile")
+            if not isinstance(incoming,dict):raise ValueError("Backup profile is missing.")
+            restored=default_profile();restored.update(incoming)
+            if not isinstance(restored.get("bingo"),list) or len(restored["bingo"])!=25:raise ValueError("Invalid Bingo data.")
+            for key in ("hunts","living_dex","shiny_dex","form_dex","teams","saved_builds","dashboard_cards"):
+                if not isinstance(restored.get(key),list):raise ValueError(f"Invalid field: {key}")
+        except Exception as exc:
+            messagebox.showerror(APP_NAME,f"Could not restore that backup. Current data was not changed.\n\n{exc}");return
+        if not messagebox.askyesno(APP_NAME,"Restore this backup?\n\nYour current Companion profile will be replaced."):return
+        try:
+            if SAVE_FILE.exists():shutil.copy2(SAVE_FILE,SAVE_FILE.with_name("profile_before_restore.json"))
+            self.app.profile=restored;self.app.save();self.profile_var.set(restored.get("profile_name","My Cobblemon World"))
+            self.app.refresh_data_pages()
+            page=self.app.pages.get("Dashboard")
+            if page and hasattr(page,"refresh"):page.refresh()
+            messagebox.showinfo(APP_NAME,"Backup restored successfully.\n\nA safety copy of the previous profile was kept.")
+        except Exception as exc:messagebox.showerror(APP_NAME,f"Restore failed:\n\n{exc}")
+
+    def audit_data(self):
+        base=base_collection_species(self.app.pokedex);forms=form_collection_species(self.app.pokedex);held=held_item_options(self.app)
+        names=[str(p.get("name","")).casefold() for p in self.app.pokedex];issues=[]
+        dup=len(names)-len(set(names))
+        if dup:issues.append(f"{dup} duplicate Pokémon/form names")
+        no_types=[p for p in self.app.pokedex if not p.get("types")]
+        if no_types:issues.append(f"{len(no_types)} Pokémon/forms missing type data")
+        no_moves=[p for p in base if not p.get("moves")]
+        mega_missing=sorted(MEGA_STONES-set(held))
+        staples=["Damp Rock","Heat Rock","Icy Rock","Smooth Rock","Terrain Extender","Choice Band","Choice Specs","Choice Scarf","Leftovers","Focus Sash"]
+        staple_missing=[x for x in staples if x not in held]
+        if mega_missing:issues.append(f"{len(mega_missing)} Mega Stones missing from held-item picker")
+        if staple_missing:issues.append("Missing held staples: "+", ".join(staple_missing))
+        report=["COBBLEMON COMPANION — DATA AUDIT","="*48,f"Companion: v{APP_VERSION}",
+            f"Pokémon entries: {len(self.app.pokedex)} ({len(base)} base + {len(forms)} forms)",
+            f"Spawn rules: {len(self.app.spawns or [])}",f"Item index entries: {len(self.app.item_index or [])}",
+            f"Held-item picker entries: {len(held)}",f"Mega Stones available: {len(MEGA_STONES)-len(mega_missing)} / {len(MEGA_STONES)}",
+            f"Base Pokémon without move data: {len(no_moves)}","","RESULT",
+            ("PASS — no structural completeness problems found." if not issues else "REVIEW — "+"; ".join(issues)),"",
+            "Server-only datapacks cannot be audited unless they are available locally."]
+        win=tk.Toplevel(self.app);win.title("Data Audit");win.configure(bg=BG);win.geometry("720x520")
+        box=tk.Text(win,bg=PANEL,fg=TEXT,insertbackground=TEXT,relief="flat",wrap="word",font=("Consolas",9),padx=14,pady=14)
+        box.pack(fill="both",expand=True,padx=16,pady=16);box.insert("1.0","\n".join(report));box.config(state="disabled")
 
     def refresh(self):
         meta = self.app.dex_meta
@@ -9566,6 +9781,276 @@ class OverlayManagerPage(Page):
             try:overlay.attributes("-alpha",float(value))
             except Exception:pass
 
+
+# ---------------------------------------------------------------------------
+# V1.8.0 — Saved Builds
+# ---------------------------------------------------------------------------
+
+class SavedBuildsPage(Page):
+    title="Saved Builds"
+    subtitle="Save individual competitive Pokémon builds once and reuse them across teams."
+
+    def __init__(self,master,app):
+        super().__init__(master,app)
+        self.header()
+        top=tk.Frame(self,bg=BG); top.pack(fill="x",padx=28,pady=(0,10))
+        tk.Button(top,text="Save From Current Team",command=self.save_from_team,bg=ACCENT_2,fg="white",relief="flat",padx=14,pady=8).pack(side="left")
+        tk.Label(top,text="Builds preserve Pokémon, ability, nature, held item, EVs and all four moves.",bg=BG,fg=MUTED,font=("Segoe UI",8)).pack(side="left",padx=12)
+        self.canvas=tk.Canvas(self,bg=BG,highlightthickness=0)
+        sb=tk.Scrollbar(self,orient="vertical",command=self.canvas.yview)
+        self.body=tk.Frame(self.canvas,bg=BG)
+        self.body.bind("<Configure>",lambda e:self.canvas.configure(scrollregion=self.canvas.bbox("all")))
+        self.canvas.create_window((0,0),window=self.body,anchor="nw",tags=("body",))
+        self.canvas.bind("<Configure>",lambda e:self.canvas.itemconfigure("body",width=e.width))
+        self.canvas.configure(yscrollcommand=sb.set)
+        self.canvas.pack(side="left",fill="both",expand=True,padx=(28,0),pady=(0,28))
+        sb.pack(side="right",fill="y",padx=(0,18),pady=(0,28))
+        self.refresh()
+
+    def save_from_team(self):
+        teams=self.app.profile.get("teams",[])
+        if not teams:return
+        # Use currently selected team when available.
+        page=self.app.pages.get("Teams")
+        team=page.current_team() if page and hasattr(page,"current_team") else teams[0]
+        mons=[m for m in team.get("members",[]) if m.get("pokemon")]
+        if not mons:
+            messagebox.showinfo(APP_NAME,"The current team has no Pokémon to save.")
+            return
+        picker=tk.Toplevel(self.app); picker.title("Save Pokémon Build"); picker.configure(bg=BG); picker.geometry("420x360")
+        tk.Label(picker,text="Choose a team member",bg=BG,fg=TEXT,font=("Segoe UI Semibold",16)).pack(anchor="w",padx=18,pady=(18,8))
+        for member in mons:
+            desc=f"{member.get('pokemon')}  •  {member.get('nature') or 'No nature'}  •  {member.get('item') or 'No item'}"
+            tk.Button(picker,text=desc,command=lambda m=copy.deepcopy(member),w=picker:self._name_build(m,w),bg=PANEL,fg=TEXT,relief="flat",anchor="w",padx=12,pady=9).pack(fill="x",padx=18,pady=3)
+
+    def _name_build(self,member,window):
+        window.destroy()
+        default=f"{member.get('pokemon','Pokémon')} Build"
+        PopupEntry(self.app,"Save Build","Build name:",default,lambda name:self._save_build(member,name))
+
+    def _save_build(self,member,name):
+        name=str(name or "").strip()
+        if not name:return
+        self.app.profile.setdefault("saved_builds",[]).append({"name":name,"member":normalize_team_member(member)})
+        self.app.save(); self.refresh()
+
+    def apply_build(self,index):
+        builds=self.app.profile.setdefault("saved_builds",[])
+        if index<0 or index>=len(builds):return
+        teams=self.app.profile.setdefault("teams",[])
+        if not teams:teams.append(blank_team("Team 1"))
+        page=self.app.pages.get("Teams")
+        team=page.current_team() if page and hasattr(page,"current_team") else teams[0]
+        slots=team["members"]
+        empty=next((i for i,m in enumerate(slots) if not m.get("pokemon")),None)
+        if empty is None:
+            # Ask which slot to replace.
+            choice=simpledialog.askinteger(APP_NAME,"Team is full. Replace which slot? (1-6)",minvalue=1,maxvalue=6,parent=self.app)
+            if not choice:return
+            empty=choice-1
+        slots[empty]=normalize_team_member(copy.deepcopy(builds[index]["member"]))
+        self.app.save()
+        if page:page.refresh()
+        messagebox.showinfo(APP_NAME,f"Added {builds[index]['name']} to slot {empty+1}.")
+
+    def delete_build(self,index):
+        builds=self.app.profile.setdefault("saved_builds",[])
+        if 0<=index<len(builds) and messagebox.askyesno(APP_NAME,f"Delete saved build '{builds[index].get('name','Build')}'?"):
+            builds.pop(index); self.app.save(); self.refresh()
+
+    def refresh(self):
+        for w in self.body.winfo_children():w.destroy()
+        builds=self.app.profile.setdefault("saved_builds",[])
+        if not builds:
+            tk.Label(self.body,text="No saved builds yet. Save one from your current team.",bg=BG,fg=MUTED,font=("Segoe UI",10)).pack(anchor="w",pady=20)
+            return
+        for i,b in enumerate(builds):
+            m=normalize_team_member(b.get("member",{}))
+            card=tk.Frame(self.body,bg=PANEL); card.pack(fill="x",pady=(0,8))
+            left=tk.Frame(card,bg=PANEL); left.pack(side="left",fill="both",expand=True,padx=14,pady=11)
+            tk.Label(left,text=b.get("name","Saved Build"),bg=PANEL,fg=TEXT,font=("Segoe UI Semibold",13)).pack(anchor="w")
+            tk.Label(left,text=f"{m['pokemon']}  •  {m['nature'] or 'No nature'}  •  {m['ability'] or 'No ability'}  •  {m['item'] or 'No item'}",bg=PANEL,fg=MUTED,font=("Segoe UI",8)).pack(anchor="w",pady=(2,2))
+            tk.Label(left,text="Moves: "+(", ".join(x for x in m["moves"] if x) or "None"),bg=PANEL,fg=TEXT,font=("Segoe UI",8),wraplength=680,justify="left").pack(anchor="w")
+            evs=", ".join(f"{k} {v}" for k,v in m["evs"].items() if v)
+            if evs:tk.Label(left,text="EVs: "+evs,bg=PANEL,fg=MUTED,font=("Segoe UI",8)).pack(anchor="w",pady=(2,0))
+            buttons=tk.Frame(card,bg=PANEL); buttons.pack(side="right",padx=12)
+            tk.Button(buttons,text="Add to Team",command=lambda x=i:self.apply_build(x),bg=ACCENT_2,fg="white",relief="flat",padx=10,pady=6).pack(fill="x",pady=2)
+            tk.Button(buttons,text="Delete",command=lambda x=i:self.delete_build(x),bg=PANEL_2,fg=MUTED,relief="flat",padx=10,pady=6).pack(fill="x",pady=2)
+
+
+# ---------------------------------------------------------------------------
+# Spawn Finder Browse mode
+# ---------------------------------------------------------------------------
+
+class SpawnBrowserPage(tk.Frame):
+    def __init__(self,master,app):
+        super().__init__(master,bg=BG); self.app=app
+        top=tk.Frame(self,bg=BG); top.pack(fill="x",padx=20,pady=(14,8))
+        tk.Button(top,text="← Back",command=app.go_back,bg=PANEL_2,fg=TEXT,relief="flat",padx=12,pady=7).pack(side="left",padx=(0,12))
+        labels=tk.Frame(top,bg=BG); labels.pack(side="left",fill="x",expand=True)
+        tk.Label(labels,text="Spawn Finder — Browse Area",bg=BG,fg=TEXT,font=("Segoe UI Semibold",20)).pack(anchor="w")
+        tk.Label(labels,text="Reverse-search the spawn database: choose where/when you are and see what can appear.",bg=BG,fg=MUTED,font=("Segoe UI",8)).pack(anchor="w")
+
+        filters=tk.Frame(self,bg=PANEL); filters.pack(fill="x",padx=20,pady=(0,8))
+        self.biome=tk.StringVar(); self.dimension=tk.StringVar(value="Any dimension"); self.time=tk.StringVar(value="Any time")
+        self.weather=tk.StringVar(value="Any weather"); self.goal=tk.StringVar(value="All Pokémon")
+        tk.Entry(filters,textvariable=self.biome,bg=PANEL_2,fg=TEXT,insertbackground=TEXT,relief="flat",font=("Segoe UI",10)).grid(row=0,column=0,sticky="ew",padx=8,pady=8,ipady=7)
+        dimensions=["Any dimension"]+sorted({friendly_resource_name(d) for s in app.spawns for d in (s.get("dimensions",[]) or []) if d})
+        times=["Any time","Day","Night","Dawn","Dusk"]
+        weathers=["Any weather","Clear","Rain","Thunder"]
+        goals=["All Pokémon","Missing Collection","Active Hunts","Bingo Targets","Missing Shinies"]
+        for col,(var,vals) in enumerate([(self.dimension,dimensions),(self.time,times),(self.weather,weathers),(self.goal,goals)],1):
+            menu=tk.OptionMenu(filters,var,*vals); menu.config(bg=PANEL_2,fg=TEXT,relief="flat",highlightthickness=0); menu["menu"].config(bg=PANEL_2,fg=TEXT); menu.grid(row=0,column=col,sticky="ew",padx=(0,8),pady=8)
+        filters.grid_columnconfigure(0,weight=2)
+        for c in range(1,5):filters.grid_columnconfigure(c,weight=1)
+        for v in (self.biome,self.dimension,self.time,self.weather,self.goal):v.trace_add("write",lambda *_:self.render())
+
+        self.summary=tk.Label(self,text="",bg=BG,fg=MUTED,font=("Segoe UI",9)); self.summary.pack(anchor="w",padx=21,pady=(0,5))
+        self.canvas=tk.Canvas(self,bg=BG,highlightthickness=0); sb=tk.Scrollbar(self,orient="vertical",command=self.canvas.yview)
+        self.body=tk.Frame(self.canvas,bg=BG); self.body.bind("<Configure>",lambda e:self.canvas.configure(scrollregion=self.canvas.bbox("all")))
+        self.canvas.create_window((0,0),window=self.body,anchor="nw",tags=("body",)); self.canvas.bind("<Configure>",lambda e:self.canvas.itemconfigure("body",width=e.width))
+        self.canvas.config(yscrollcommand=sb.set); self.canvas.pack(side="left",fill="both",expand=True,padx=(20,0),pady=(0,18)); sb.pack(side="right",fill="y",padx=(0,12),pady=(0,18))
+        self.render()
+
+    def render(self):
+        for w in self.body.winfo_children():w.destroy()
+        biome=self.biome.get().strip().casefold(); dim=self.dimension.get(); tm=self.time.get(); weather=self.weather.get(); goal=self.goal.get()
+        owned={str(x).casefold() for x in self.app.profile.get("living_dex",[])}
+        shiny={str(x).casefold() for x in self.app.profile.get("shiny_dex",[])}
+        hunts={str(x.get("pokemon","")).casefold() for x in self.app.profile.get("hunts",[])}
+        bingo={str(x.get("pokemon","")).casefold() for x in self.app.profile.get("bingo",[]) if x.get("pokemon") and not x.get("caught")}
+        grouped={}
+        for spawn in self.app.spawns:
+            name=str(spawn.get("pokemon","")).strip()
+            if not name:continue
+            habitats=" ".join(spawn_habitat_labels(spawn)).casefold()
+            if biome and biome not in habitats:continue
+            dims=[friendly_resource_name(x) for x in spawn.get("dimensions",[]) or []]
+            if dim!="Any dimension" and dim not in dims:continue
+            ft=friendly_time(spawn.get("time"))
+            if tm!="Any time" and tm.casefold() not in str(ft).casefold():continue
+            ws=[friendly_resource_name(x) for x in spawn.get("weather",[]) or []]
+            if weather!="Any weather" and ws and weather.casefold() not in " ".join(ws).casefold():continue
+            key=name.casefold()
+            if goal=="Missing Collection" and key in owned:continue
+            if goal=="Missing Shinies" and key in shiny:continue
+            if goal=="Active Hunts" and key not in hunts:continue
+            if goal=="Bingo Targets" and key not in bingo:continue
+            grouped.setdefault(name,[]).append(spawn)
+        rows=sorted(grouped.items(),key=lambda x:x[0].casefold())
+        self.summary.config(text=f"{len(rows)} Pokémon match these conditions")
+        for name,entries in rows[:250]:
+            species=species_by_name(self.app.pokedex,name)
+            card=tk.Frame(self.body,bg=PANEL); card.pack(fill="x",pady=3)
+            left=tk.Frame(card,bg=PANEL); left.pack(side="left",fill="both",expand=True,padx=12,pady=8)
+            tk.Label(left,text=name,bg=PANEL,fg=TEXT,font=("Segoe UI Semibold",11)).pack(anchor="w")
+            labels=[]
+            for e in entries:
+                labels.extend(spawn_habitat_labels(e))
+            labels=list(dict.fromkeys(labels))
+            tk.Label(left,text=", ".join(labels[:6]) or "Imported spawn rule",bg=PANEL,fg=MUTED,font=("Segoe UI",8),wraplength=750,justify="left").pack(anchor="w",pady=(2,0))
+            tags=[]
+            k=name.casefold()
+            if k not in owned:tags.append("Missing")
+            if k in hunts:tags.append("Hunt")
+            if k in bingo:tags.append("Bingo")
+            if k not in shiny:tags.append("Shiny missing")
+            if tags:tk.Label(left,text=" • ".join(tags),bg=PANEL,fg=ACCENT_2,font=("Segoe UI",7,"bold")).pack(anchor="w",pady=(2,0))
+            tk.Button(card,text="Details",command=lambda n=name:self.open_details(n),bg=ACCENT_2,fg="white",relief="flat",padx=10,pady=6).pack(side="right",padx=12)
+    def open_details(self,name):
+        self.app.show_page("Spawn Finder")
+        page=self.app.pages.get("Spawn Finder")
+        if page and hasattr(page,"focus_pokemon"):page.focus_pokemon(name)
+
+
+# ---------------------------------------------------------------------------
+# V1.8.0 — Dashboard personalization
+# ---------------------------------------------------------------------------
+
+class DashboardEditor(tk.Toplevel):
+    OPTIONS=[
+        ("Hunts","Hunt Planner"),
+        ("Bingo","Weekly Bingo"),
+        ("Team","Current Team"),
+        ("Breeding","Breeding Project"),
+        ("PokemonOfDay","Pokémon of the Day"),
+        ("QuickActions","Quick Actions"),
+    ]
+    def __init__(self,app,home):
+        super().__init__(app); self.app=app; self.home=home
+        self.title("Customize Home Dashboard"); self.configure(bg=BG); self.geometry("430x470"); self.resizable(False,False)
+        tk.Label(self,text="Customize Home Dashboard",bg=BG,fg=TEXT,font=("Segoe UI Semibold",18)).pack(anchor="w",padx=20,pady=(20,4))
+        tk.Label(self,text="Choose the cards you want to see on Home.",bg=BG,fg=MUTED,font=("Segoe UI",9)).pack(anchor="w",padx=20,pady=(0,12))
+        current=set(app.profile.get("dashboard_cards",[])); self.vars={}
+        body=tk.Frame(self,bg=PANEL); body.pack(fill="both",expand=True,padx=20,pady=(0,12))
+        for key,label in self.OPTIONS:
+            var=tk.BooleanVar(value=key in current); self.vars[key]=var
+            tk.Checkbutton(body,text=label,variable=var,bg=PANEL,fg=TEXT,selectcolor=PANEL_2,activebackground=PANEL,activeforeground=TEXT,font=("Segoe UI",10),anchor="w").pack(fill="x",padx=14,pady=7)
+        buttons=tk.Frame(self,bg=BG); buttons.pack(fill="x",padx=20,pady=(0,20))
+        tk.Button(buttons,text="Reset Default",command=self.reset,bg=PANEL_2,fg=TEXT,relief="flat",padx=12,pady=7).pack(side="left")
+        tk.Button(buttons,text="Save Dashboard",command=self.save,bg=ACCENT_2,fg="white",relief="flat",padx=12,pady=7).pack(side="right")
+    def reset(self):
+        defaults={x[0] for x in self.OPTIONS}
+        for k,v in self.vars.items():v.set(k in defaults)
+    def save(self):
+        self.app.profile["dashboard_cards"]=[k for k,_ in self.OPTIONS if self.vars[k].get()]
+        self.app.save(); self.home.apply_dashboard_layout(); self.destroy()
+
+
+# ---------------------------------------------------------------------------
+# V1.8.0 — First-launch onboarding
+# ---------------------------------------------------------------------------
+
+class OnboardingWindow(tk.Toplevel):
+    def __init__(self,app):
+        super().__init__(app); self.app=app; self.step=0
+        self.title("Welcome to Cobblemon Companion"); self.configure(bg=BG); self.geometry("690x520"); self.resizable(False,False)
+        self.transient(app); self.grab_set()
+        self.body=tk.Frame(self,bg=BG); self.body.pack(fill="both",expand=True,padx=34,pady=26)
+        bottom=tk.Frame(self,bg=BG); bottom.pack(fill="x",padx=34,pady=(0,28))
+        self.back=tk.Button(bottom,text="← Back",command=self.prev,bg=PANEL_2,fg=TEXT,relief="flat",padx=14,pady=8)
+        self.back.pack(side="left")
+        self.next=tk.Button(bottom,text="Next →",command=self.advance,bg=ACCENT_2,fg="white",relief="flat",padx=14,pady=8)
+        self.next.pack(side="right")
+        self.render()
+    def render(self):
+        for w in self.body.winfo_children():w.destroy()
+        self.back.config(state="normal" if self.step else "disabled")
+        if self.step==0:
+            tk.Label(self.body,text="Welcome to Cobblemon Companion",bg=BG,fg=TEXT,font=("Segoe UI Semibold",25)).pack(anchor="w",pady=(20,8))
+            tk.Label(self.body,text="Your desktop toolkit for Pokédex research, spawning, team building, collection tracking, Bingo, hunts and in-game overlays.",bg=BG,fg=MUTED,font=("Segoe UI",11),wraplength=600,justify="left").pack(anchor="w")
+            tk.Label(self.body,text="This setup takes less than a minute.",bg=BG,fg=ACCENT_2,font=("Segoe UI Semibold",10)).pack(anchor="w",pady=(24,0))
+        elif self.step==1:
+            tk.Label(self.body,text="Cobblemon Installation",bg=BG,fg=TEXT,font=("Segoe UI Semibold",23)).pack(anchor="w",pady=(10,8))
+            jar=self.app.dex_meta.get("source_jar","")
+            if jar:
+                tk.Label(self.body,text="✓ Cobblemon detected",bg=BG,fg=GOOD,font=("Segoe UI Semibold",13)).pack(anchor="w",pady=(12,5))
+                tk.Label(self.body,text=str(jar),bg=PANEL,fg=MUTED,font=("Segoe UI",8),wraplength=600,justify="left",padx=12,pady=12).pack(fill="x")
+                tk.Label(self.body,text=f"{len(self.app.pokedex)} Pokémon currently imported.",bg=BG,fg=MUTED,font=("Segoe UI",9)).pack(anchor="w",pady=(8,0))
+            else:
+                tk.Label(self.body,text="Companion did not auto-detect a Cobblemon installation yet.",bg=BG,fg=MUTED,font=("Segoe UI",10),wraplength=600,justify="left").pack(anchor="w",pady=(12,6))
+                tk.Label(self.body,text="After setup, open Settings and select your Cobblemon JAR. Nothing in your modpack is modified.",bg=BG,fg=MUTED,font=("Segoe UI",9),wraplength=600,justify="left").pack(anchor="w")
+        else:
+            tk.Label(self.body,text="You're Ready",bg=BG,fg=TEXT,font=("Segoe UI Semibold",25)).pack(anchor="w",pady=(10,8))
+            tk.Label(self.body,text="A few useful places to start:",bg=BG,fg=MUTED,font=("Segoe UI",10)).pack(anchor="w",pady=(0,14))
+            for title,desc in [
+                ("Spawn Finder","Search a Pokémon or browse an area with Spawn Finder."),
+                ("Collection","Track Living Dex, Shinies and individual forms."),
+                ("Teams","Build teams, save reusable builds, analyze threats and share team codes."),
+                ("Overlays","Pin your Hunt or Bingo information over Minecraft."),
+                ("Home","Use Edit Dashboard to hide cards you don't care about."),
+            ]:
+                row=tk.Frame(self.body,bg=PANEL); row.pack(fill="x",pady=3)
+                tk.Label(row,text=title,bg=PANEL,fg=TEXT,font=("Segoe UI Semibold",10),width=15,anchor="w").pack(side="left",padx=10,pady=8)
+                tk.Label(row,text=desc,bg=PANEL,fg=MUTED,font=("Segoe UI",8),anchor="w").pack(side="left",fill="x",expand=True,pady=8)
+            self.next.config(text="Finish Setup")
+    def prev(self):
+        if self.step>0:self.step-=1; self.next.config(text="Next →"); self.render()
+    def advance(self):
+        if self.step<2:self.step+=1; self.render()
+        else:
+            self.app.profile["onboarding_complete"]=True; self.app.save(); self.destroy()
+
 class ToolsPage(Page):
     title = "Tools"
     subtitle = "Small utilities that are genuinely useful during Cobblemon play."
@@ -9747,6 +10232,7 @@ class CobblemonCompanion(tk.Tk):
         self.bind_all("<Button-4>", self._global_mousewheel_linux, add="+")
         self.bind_all("<Button-5>", self._global_mousewheel_linux, add="+")
 
+        self._first_run = not SAVE_FILE.exists()
         self.profile = load_profile()
         self.overlays = {}
         self.pokedex = load_dex()
@@ -9830,9 +10316,10 @@ class CobblemonCompanion(tk.Tk):
         self._current_page_name = None
 
         self.pages = {
-            "Home": HomePage(self.content, self), "Pokédex": PokedexPage(self.content, self),
+            "Dashboard": HomePage(self.content, self), "Pokédex": PokedexPage(self.content, self),
             "Bingo": BingoPage(self.content, self), "Hunts": HuntsPage(self.content, self),
             "Collection": CollectionPage(self.content, self), "Teams": TeamBuilderPage(self.content, self),
+            "Saved Builds": SavedBuildsPage(self.content, self),
             "Breeding": BreedingPlannerPage(self.content, self), "Spawn Finder": SpawnFinderPage(self.content, self),
             "Database": DatabasePage(self.content, self), "Overlays": OverlayManagerPage(self.content, self),
             "Tools": ToolsPage(self.content, self), "Settings": SettingsPage(self.content, self),
@@ -9845,10 +10332,10 @@ class CobblemonCompanion(tk.Tk):
         nav_area=tk.Frame(sidebar,bg=PANEL)
         nav_area.pack(fill="both",expand=True,padx=7)
         sections=[
-            ("HOME",[("Home","⌂")]),
+            ("HOME",[("Dashboard","⌂")]),
             ("POKÉMON",[("Pokédex","◉"),("Spawn Finder","⌖"),("Collection","▦")]),
             ("PROGRESS",[("Hunts","◎"),("Bingo","▦")]),
-            ("COMPETITIVE",[("Teams","⚔"),("Breeding","◇")]),
+            ("COMPETITIVE",[("Teams","⚔"),("Saved Builds","◆"),("Breeding","◇")]),
             ("REFERENCE",[("Database","▤"),("Tools","⚙")]),
             ("OVERLAY",[("Overlays","▣")]),
         ]
@@ -9880,8 +10367,10 @@ class CobblemonCompanion(tk.Tk):
             relief="flat",bd=0,font=("Segoe UI Semibold",8),pady=6,cursor="hand2").pack(fill="x",padx=7,pady=(0,7))
 
         self.current = None
-        self.show_page("Home")
+        self.show_page("Dashboard")
         self.protocol("WM_DELETE_WINDOW", self.on_close)
+        if self._first_run and not self.profile.get("onboarding_complete",False):
+            self.after(450,lambda:OnboardingWindow(self))
 
         # Build the full Cobblemon item index after the window is already visible.
         # This prevents JAR scanning from delaying app startup.
@@ -10046,6 +10535,8 @@ class CobblemonCompanion(tk.Tk):
                 font=("Segoe UI Semibold",8) if active else ("Segoe UI",8))
 
     def show_page(self, name, clear_history=True):
+        if name == "Home":
+            name = "Dashboard"
         self._hide_current_content()
 
         # Sidebar navigation starts a new branch, just like clicking a top-level
@@ -10085,7 +10576,7 @@ class CobblemonCompanion(tk.Tk):
 
     def go_back(self):
         if not self._nav_stack:
-            self.show_page("Home")
+            self.show_page("Dashboard")
             return
 
         if self._embedded_view is not None:
@@ -10144,6 +10635,12 @@ class CobblemonCompanion(tk.Tk):
 
 
 
+    def open_spawn_browser(self):
+        return self.push_embedded_view(
+            lambda master: SpawnBrowserPage(master,self),
+            "Spawn Finder"
+        )
+
     def toggle_overlay(self, kind):
         existing=self.overlays.get(kind)
         if existing:
@@ -10168,7 +10665,7 @@ class CobblemonCompanion(tk.Tk):
             except Exception:pass
 
     def refresh_data_pages(self):
-        for name in ("Pokédex", "Spawn Finder", "Home", "Settings"):
+        for name in ("Pokédex", "Spawn Finder", "Collection", "Saved Builds", "Dashboard", "Settings"):
             page = self.pages.get(name)
             if page and hasattr(page, "refresh"):
                 page.refresh()
