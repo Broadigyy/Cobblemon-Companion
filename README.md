@@ -87,7 +87,30 @@ Current Hunt and Weekly Bingo overlays support:
 - opacity
 - remembered placement
 
+<<<<<<< HEAD
 For best results, use Minecraft in **windowed or borderless fullscreen**.
+=======
+Overlays can be moved, resized, locked, and given adjustable opacity.
+
+For the most reliable behavior, Minecraft should be played in **windowed or borderless fullscreen** mode. True exclusive fullscreen may cover normal Windows top-level overlays.
+
+Use:
+
+```text
+Ctrl + Shift + O
+```
+
+to jump directly to Overlay controls.
+
+## Screenshots
+
+<img width="2532" height="1217" alt="image" src="https://github.com/user-attachments/assets/2cc1568a-2c52-429d-9a89-633ed8519158" />
+<img width="1175" height="753" alt="image" src="https://github.com/user-attachments/assets/44e2f98f-1cc6-467a-bb28-abd9ceb8cb56" />
+<img width="1176" height="754" alt="image" src="https://github.com/user-attachments/assets/5ca19590-f380-4368-ab12-52098afad2d1" />
+<img width="1322" height="754" alt="image" src="https://github.com/user-attachments/assets/255f2c5a-b291-4a65-aa74-29543854eb2e" />
+
+
+>>>>>>> f406461f42224b2d998c1db4b8dc84b953f5c8ad
 
 ## Support development
 
